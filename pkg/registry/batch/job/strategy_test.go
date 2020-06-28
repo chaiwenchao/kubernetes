@@ -25,9 +25,10 @@ import (
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/kubernetes/pkg/api/testapi"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/apis/batch"
+	_ "k8s.io/kubernetes/pkg/apis/batch/install"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/features"
 )
@@ -119,6 +120,24 @@ func TestJobStrategy(t *testing.T) {
 	}
 	if ttlEnabled != (job.Spec.TTLSecondsAfterFinished != nil || updatedJob.Spec.TTLSecondsAfterFinished != nil) {
 		t.Errorf("Job should only allow updating .spec.ttlSecondsAfterFinished when %v feature is enabled", features.TTLAfterFinished)
+	}
+
+	// set TTLSecondsAfterFinished on both old and new jobs
+	job.Spec.TTLSecondsAfterFinished = newInt32(1)
+	updatedJob.Spec.TTLSecondsAfterFinished = newInt32(2)
+
+	// Existing TTLSecondsAfterFinished should be preserved when feature is on
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.TTLAfterFinished, true)()
+	Strategy.PrepareForUpdate(ctx, updatedJob, job)
+	if job.Spec.TTLSecondsAfterFinished == nil || updatedJob.Spec.TTLSecondsAfterFinished == nil {
+		t.Errorf("existing TTLSecondsAfterFinished should be preserved")
+	}
+
+	// Existing TTLSecondsAfterFinished should be preserved when feature is off
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.TTLAfterFinished, false)()
+	Strategy.PrepareForUpdate(ctx, updatedJob, job)
+	if job.Spec.TTLSecondsAfterFinished == nil || updatedJob.Spec.TTLSecondsAfterFinished == nil {
+		t.Errorf("existing TTLSecondsAfterFinished should be preserved")
 	}
 
 	// Make sure we correctly implement the interface.
@@ -262,7 +281,7 @@ func TestJobStatusStrategy(t *testing.T) {
 
 func TestSelectableFieldLabelConversions(t *testing.T) {
 	apitesting.TestSelectableFieldLabelConversionsOfKind(t,
-		testapi.Batch.GroupVersion().String(),
+		"batch/v1",
 		"Job",
 		JobToSelectableFields(&batch.Job{}),
 		nil,

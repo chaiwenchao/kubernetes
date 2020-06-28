@@ -33,6 +33,7 @@ const (
 	// TODO: Move these constants to k8s.io/kubelet/config/v1beta1 instead?
 	DefaultIPTablesMasqueradeBit = 14
 	DefaultIPTablesDropBit       = 15
+	DefaultVolumePluginDir       = "/usr/libexec/kubernetes/kubelet-plugins/volume/exec/"
 )
 
 var (
@@ -47,6 +48,9 @@ func addDefaultingFuncs(scheme *kruntime.Scheme) error {
 }
 
 func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfiguration) {
+	if obj.EnableServer == nil {
+		obj.EnableServer = utilpointer.BoolPtr(true)
+	}
 	if obj.SyncFrequency == zeroDuration {
 		obj.SyncFrequency = metav1.Duration{Duration: 1 * time.Minute}
 	}
@@ -112,7 +116,7 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 		// set to NodeStatusUpdateFrequency if NodeStatusUpdateFrequency is set
 		// explicitly.
 		if obj.NodeStatusUpdateFrequency == zeroDuration {
-			obj.NodeStatusReportFrequency = metav1.Duration{Duration: time.Minute}
+			obj.NodeStatusReportFrequency = metav1.Duration{Duration: 5 * time.Minute}
 		} else {
 			obj.NodeStatusReportFrequency = obj.NodeStatusUpdateFrequency
 		}
@@ -149,6 +153,9 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 		// Keep the same as default NodeStatusUpdateFrequency
 		obj.CPUManagerReconcilePeriod = metav1.Duration{Duration: 10 * time.Second}
 	}
+	if obj.TopologyManagerPolicy == "" {
+		obj.TopologyManagerPolicy = kubeletconfigv1beta1.NoneTopologyManagerPolicy
+	}
 	if obj.RuntimeRequestTimeout == zeroDuration {
 		obj.RuntimeRequestTimeout = metav1.Duration{Duration: 2 * time.Minute}
 	}
@@ -158,7 +165,8 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 	if obj.MaxPods == 0 {
 		obj.MaxPods = 110
 	}
-	if obj.PodPidsLimit == nil {
+	// default nil or negative value to -1 (implies node allocatable pid limit)
+	if obj.PodPidsLimit == nil || *obj.PodPidsLimit < int64(0) {
 		temp := int64(-1)
 		obj.PodPidsLimit = &temp
 	}
@@ -170,6 +178,9 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 	}
 	if obj.CPUCFSQuotaPeriod == nil {
 		obj.CPUCFSQuotaPeriod = &metav1.Duration{Duration: 100 * time.Millisecond}
+	}
+	if obj.NodeStatusMaxImages == nil {
+		obj.NodeStatusMaxImages = utilpointer.Int32Ptr(50)
 	}
 	if obj.MaxOpenFiles == 0 {
 		obj.MaxOpenFiles = 1000000
@@ -218,5 +229,8 @@ func SetDefaults_KubeletConfiguration(obj *kubeletconfigv1beta1.KubeletConfigura
 	}
 	if obj.EnforceNodeAllocatable == nil {
 		obj.EnforceNodeAllocatable = DefaultNodeAllocatableEnforcement
+	}
+	if obj.VolumePluginDir == "" {
+		obj.VolumePluginDir = DefaultVolumePluginDir
 	}
 }

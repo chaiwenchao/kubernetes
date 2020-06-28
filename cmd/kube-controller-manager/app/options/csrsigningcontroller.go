@@ -19,8 +19,7 @@ package options
 import (
 	"github.com/spf13/pflag"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	kubectrlmgrconfig "k8s.io/kubernetes/pkg/controller/apis/config"
+	csrsigningconfig "k8s.io/kubernetes/pkg/controller/certificates/signer/config"
 )
 
 const (
@@ -35,9 +34,7 @@ const (
 
 // CSRSigningControllerOptions holds the CSRSigningController options.
 type CSRSigningControllerOptions struct {
-	ClusterSigningDuration metav1.Duration
-	ClusterSigningKeyFile  string
-	ClusterSigningCertFile string
+	*csrsigningconfig.CSRSigningControllerConfiguration
 }
 
 // AddFlags adds flags related to CSRSigningController for controller manager to the specified FlagSet.
@@ -48,11 +45,13 @@ func (o *CSRSigningControllerOptions) AddFlags(fs *pflag.FlagSet) {
 
 	fs.StringVar(&o.ClusterSigningCertFile, "cluster-signing-cert-file", o.ClusterSigningCertFile, "Filename containing a PEM-encoded X509 CA certificate used to issue cluster-scoped certificates")
 	fs.StringVar(&o.ClusterSigningKeyFile, "cluster-signing-key-file", o.ClusterSigningKeyFile, "Filename containing a PEM-encoded RSA or ECDSA private key used to sign cluster-scoped certificates")
+	fs.DurationVar(&o.ClusterSigningDuration.Duration, "cluster-signing-duration", o.ClusterSigningDuration.Duration, "The length of duration signed certificates will be given.")
 	fs.DurationVar(&o.ClusterSigningDuration.Duration, "experimental-cluster-signing-duration", o.ClusterSigningDuration.Duration, "The length of duration signed certificates will be given.")
+	fs.MarkDeprecated("experimental-cluster-signing-duration", "use --cluster-signing-duration")
 }
 
 // ApplyTo fills up CSRSigningController config with options.
-func (o *CSRSigningControllerOptions) ApplyTo(cfg *kubectrlmgrconfig.CSRSigningControllerConfiguration) error {
+func (o *CSRSigningControllerOptions) ApplyTo(cfg *csrsigningconfig.CSRSigningControllerConfiguration) error {
 	if o == nil {
 		return nil
 	}

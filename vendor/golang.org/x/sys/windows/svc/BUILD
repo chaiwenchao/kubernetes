@@ -16,6 +16,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = select({
         "@io_bazel_rules_go//go/platform:windows": [
+            "//vendor/golang.org/x/sys/internal/unsafeheader:go_default_library",
             "//vendor/golang.org/x/sys/windows:go_default_library",
         ],
         "//conditions:default": [],
@@ -31,7 +32,10 @@ filegroup(
 
 filegroup(
     name = "all-srcs",
-    srcs = [":package-srcs"],
+    srcs = [
+        ":package-srcs",
+        "//vendor/golang.org/x/sys/windows/svc/mgr:all-srcs",
+    ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
 )

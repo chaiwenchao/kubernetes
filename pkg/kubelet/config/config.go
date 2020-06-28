@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/kubelet/checkpoint"
 	"k8s.io/kubernetes/pkg/kubelet/checkpointmanager"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
@@ -314,9 +314,7 @@ func (s *podStorage) merge(source string, change interface{}) (adds, updates, de
 		}
 	case kubetypes.RESTORE:
 		klog.V(4).Infof("Restoring pods for source %s", source)
-		for _, value := range update.Pods {
-			restorePods = append(restorePods, value)
-		}
+		restorePods = append(restorePods, update.Pods...)
 
 	default:
 		klog.Warningf("Received invalid update type: %v", update)

@@ -17,6 +17,7 @@ limitations under the License.
 package wait
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -25,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/runtime"
 )
 
@@ -48,6 +50,26 @@ func TestUntil(t *testing.T) {
 	<-called
 }
 
+func TestUntilWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	cancel()
+	UntilWithContext(ctx, func(context.Context) {
+		t.Fatal("should not have been invoked")
+	}, 0)
+
+	ctx, cancel = context.WithCancel(context.TODO())
+	called := make(chan struct{})
+	go func() {
+		UntilWithContext(ctx, func(context.Context) {
+			called <- struct{}{}
+		}, 0)
+		close(called)
+	}()
+	<-called
+	cancel()
+	<-called
+}
+
 func TestNonSlidingUntil(t *testing.T) {
 	ch := make(chan struct{})
 	close(ch)
@@ -65,6 +87,26 @@ func TestNonSlidingUntil(t *testing.T) {
 	}()
 	<-called
 	close(ch)
+	<-called
+}
+
+func TestNonSlidingUntilWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	cancel()
+	NonSlidingUntilWithContext(ctx, func(context.Context) {
+		t.Fatal("should not have been invoked")
+	}, 0)
+
+	ctx, cancel = context.WithCancel(context.TODO())
+	called := make(chan struct{})
+	go func() {
+		NonSlidingUntilWithContext(ctx, func(context.Context) {
+			called <- struct{}{}
+		}, 0)
+		close(called)
+	}()
+	<-called
+	cancel()
 	<-called
 }
 
@@ -98,6 +140,26 @@ func TestJitterUntil(t *testing.T) {
 	}()
 	<-called
 	close(ch)
+	<-called
+}
+
+func TestJitterUntilWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	cancel()
+	JitterUntilWithContext(ctx, func(context.Context) {
+		t.Fatal("should not have been invoked")
+	}, 0, 1.0, true)
+
+	ctx, cancel = context.WithCancel(context.TODO())
+	called := make(chan struct{})
+	go func() {
+		JitterUntilWithContext(ctx, func(context.Context) {
+			called <- struct{}{}
+		}, 0, 1.0, true)
+		close(called)
+	}()
+	<-called
+	cancel()
 	<-called
 }
 
@@ -456,18 +518,77 @@ func TestWaitFor(t *testing.T) {
 	}
 }
 
-func TestWaitForWithDelay(t *testing.T) {
-	done := make(chan struct{})
-	defer close(done)
-	WaitFor(poller(time.Millisecond, ForeverTestTimeout), func() (bool, error) {
+// TestWaitForWithEarlyClosingWaitFunc tests WaitFor when the WaitFunc closes its channel. The WaitFor should
+// always return ErrWaitTimeout.
+func TestWaitForWithEarlyClosingWaitFunc(t *testing.T) {
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	start := time.Now()
+	err := WaitFor(func(done <-chan struct{}) <-chan struct{} {
+		c := make(chan struct{})
+		close(c)
+		return c
+	}, func() (bool, error) {
+		return false, nil
+	}, stopCh)
+	duration := time.Since(start)
+
+	// The WaitFor should return immediately, so the duration is close to 0s.
+	if duration >= ForeverTestTimeout/2 {
+		t.Errorf("expected short timeout duration")
+	}
+	if err != ErrWaitTimeout {
+		t.Errorf("expected ErrWaitTimeout from WaitFunc")
+	}
+}
+
+// TestWaitForWithClosedChannel tests WaitFor when it receives a closed channel. The WaitFor should
+// always return ErrWaitTimeout.
+func TestWaitForWithClosedChannel(t *testing.T) {
+	stopCh := make(chan struct{})
+	close(stopCh)
+	c := make(chan struct{})
+	defer close(c)
+	start := time.Now()
+	err := WaitFor(func(done <-chan struct{}) <-chan struct{} {
+		return c
+	}, func() (bool, error) {
+		return false, nil
+	}, stopCh)
+	duration := time.Since(start)
+	// The WaitFor should return immediately, so the duration is close to 0s.
+	if duration >= ForeverTestTimeout/2 {
+		t.Errorf("expected short timeout duration")
+	}
+	// The interval of the poller is ForeverTestTimeout, so the WaitFor should always return ErrWaitTimeout.
+	if err != ErrWaitTimeout {
+		t.Errorf("expected ErrWaitTimeout from WaitFunc")
+	}
+}
+
+// TestWaitForClosesStopCh verifies that after the condition func returns true, WaitFor() closes the stop channel it supplies to the WaitFunc.
+func TestWaitForClosesStopCh(t *testing.T) {
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	waitFunc := poller(time.Millisecond, ForeverTestTimeout)
+	var doneCh <-chan struct{}
+
+	WaitFor(func(done <-chan struct{}) <-chan struct{} {
+		doneCh = done
+		return waitFunc(done)
+	}, func() (bool, error) {
 		time.Sleep(10 * time.Millisecond)
 		return true, nil
-	}, done)
-	// If polling goroutine doesn't see the done signal it will leak timers.
+	}, stopCh)
+	// The polling goroutine should be closed after WaitFor returning.
 	select {
-	case done <- struct{}{}:
-	case <-time.After(ForeverTestTimeout):
-		t.Errorf("expected an ack of the done signal.")
+	case _, ok := <-doneCh:
+		if ok {
+			t.Errorf("expected closed channel after WaitFunc returning")
+		}
+	default:
+		t.Errorf("expected an ack of the done signal")
 	}
 }
 
@@ -541,6 +662,99 @@ func TestBackoff_Step(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestContextForChannel(t *testing.T) {
+	var wg sync.WaitGroup
+	parentCh := make(chan struct{})
+	done := make(chan struct{})
+
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := contextForChannel(parentCh)
+			defer cancel()
+			<-ctx.Done()
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	// Closing parent channel should cancel all children contexts
+	close(parentCh)
+
+	select {
+	case <-done:
+	case <-time.After(ForeverTestTimeout):
+		t.Errorf("unexepcted timeout waiting for parent to cancel child contexts")
+	}
+}
+
+func TestExponentialBackoffManagerGetNextBackoff(t *testing.T) {
+	fc := clock.NewFakeClock(time.Now())
+	backoff := NewExponentialBackoffManager(1, 10, 10, 2.0, 0.0, fc)
+	durations := []time.Duration{1, 2, 4, 8, 10, 10, 10}
+	for i := 0; i < len(durations); i++ {
+		generatedBackoff := backoff.(*exponentialBackoffManagerImpl).getNextBackoff()
+		if generatedBackoff != durations[i] {
+			t.Errorf("unexpected %d-th backoff: %d, expecting %d", i, generatedBackoff, durations[i])
+		}
+	}
+
+	fc.Step(11)
+	resetDuration := backoff.(*exponentialBackoffManagerImpl).getNextBackoff()
+	if resetDuration != 1 {
+		t.Errorf("after reset, backoff should be 1, but got %d", resetDuration)
+	}
+}
+
+func TestJitteredBackoffManagerGetNextBackoff(t *testing.T) {
+	// positive jitter
+	backoffMgr := NewJitteredBackoffManager(1, 1, clock.NewFakeClock(time.Now()))
+	for i := 0; i < 5; i++ {
+		backoff := backoffMgr.(*jitteredBackoffManagerImpl).getNextBackoff()
+		if backoff < 1 || backoff > 2 {
+			t.Errorf("backoff out of range: %d", backoff)
+		}
+	}
+
+	// negative jitter, shall be a fixed backoff
+	backoffMgr = NewJitteredBackoffManager(1, -1, clock.NewFakeClock(time.Now()))
+	backoff := backoffMgr.(*jitteredBackoffManagerImpl).getNextBackoff()
+	if backoff != 1 {
+		t.Errorf("backoff should be 1, but got %d", backoff)
+	}
+}
+
+func TestJitterBackoffManagerWithRealClock(t *testing.T) {
+	backoffMgr := NewJitteredBackoffManager(1*time.Millisecond, 0, &clock.RealClock{})
+	for i := 0; i < 5; i++ {
+		start := time.Now()
+		<-backoffMgr.Backoff().C()
+		passed := time.Now().Sub(start)
+		if passed < 1*time.Millisecond {
+			t.Errorf("backoff should be at least 1ms, but got %s", passed.String())
+		}
+	}
+}
+
+func TestExponentialBackoffManagerWithRealClock(t *testing.T) {
+	// backoff at least 1ms, 2ms, 4ms, 8ms, 10ms, 10ms, 10ms
+	durationFactors := []time.Duration{1, 2, 4, 8, 10, 10, 10}
+	backoffMgr := NewExponentialBackoffManager(1*time.Millisecond, 10*time.Millisecond, 1*time.Hour, 2.0, 0.0, &clock.RealClock{})
+
+	for i := range durationFactors {
+		start := time.Now()
+		<-backoffMgr.Backoff().C()
+		passed := time.Now().Sub(start)
+		if passed < durationFactors[i]*time.Millisecond {
+			t.Errorf("backoff should be at least %d ms, but got %s", durationFactors[i], passed.String())
 		}
 	}
 }
